@@ -8,14 +8,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"smclipper-backend/internal/models"
+	"smclipper-backend/internal/jobs"
 )
 
 type ProjectHandler struct {
-	DB *pgxpool.Pool
+	DB    *pgxpool.Pool
+	Queue *jobs.Queue
 }
 
-func NewProjectHandler(db *pgxpool.Pool) *ProjectHandler {
-	return &ProjectHandler{DB: db}
+func NewProjectHandler(db *pgxpool.Pool, q *jobs.Queue) *ProjectHandler {
+	return &ProjectHandler{DB: db, Queue: q}
 }
 
 // POST /api/projects
@@ -35,7 +37,7 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	query := `
 		INSERT INTO projects (youtube_url, status)
 		VALUES ($1, 'pending')
-		RETURNING id, youtube_url, title, status, created_at, updated_at
+		RETURNING id, youtube_url, COALESCE(title, '') as title, status, created_at, updated_at
 	`
 
 	err := h.DB.QueryRow(context.Background(), query, req.YoutubeURL).Scan(
@@ -84,7 +86,7 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 // GET /api/projects
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	query := `
-		SELECT id, youtube_url, title, status, created_at, updated_at
+		SELECT id, youtube_url, COALESCE(title, '') as title, status, created_at, updated_at
 		FROM projects
 		ORDER BY created_at DESC
 	`
@@ -107,4 +109,50 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, projects)
+}
+
+// POST /api/projects/{id}/download
+func (h *ProjectHandler) TriggerDownload(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+
+	var jobID string
+	err := h.DB.QueryRow(context.Background(), `
+		INSERT INTO jobs (project_id, job_type, status)
+		VALUES ($1, 'download', 'queued')
+		RETURNING id
+	`, projectID).Scan(&jobID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create job: "+err.Error())
+		return
+	}
+
+	h.Queue.Enqueue(jobID)
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"job_id": jobID,
+		"status": "queued",
+	})
+}
+
+// POST /api/projects/{id}/transcribe
+func (h *ProjectHandler) TriggerTranscribe(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+
+	var jobID string
+	err := h.DB.QueryRow(context.Background(), `
+		INSERT INTO jobs (project_id, job_type, status)
+		VALUES ($1, 'transcribe', 'queued')
+		RETURNING id
+	`, projectID).Scan(&jobID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create job: "+err.Error())
+		return
+	}
+
+	h.Queue.Enqueue(jobID)
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"job_id": jobID,
+		"status": "queued",
+	})
 }

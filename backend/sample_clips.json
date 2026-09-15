@@ -1,0 +1,18 @@
+{
+  "clips": [
+    {
+      "title": "Chorus - Never Gonna Give You Up",
+      "start": "00:00:43",
+      "end": "00:01:00",
+      "reason": "Bagian chorus paling catchy dan dikenali",
+      "hook_score": 9
+    },
+    {
+      "title": "Bridge sebelum chorus kedua",
+      "start": "00:01:59",
+      "end": "00:02:16",
+      "reason": "Ada variasi melodi menarik",
+      "hook_score": 7
+    }
+  ]
+}
