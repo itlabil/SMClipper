@@ -61,6 +61,8 @@ func (q *Queue) processJob(jobID string) {
 		runErr = q.runDownload(ctx, jobID, projectID)
 	case "transcribe":
 		runErr = q.runTranscribe(ctx, jobID, projectID)
+	case "render":
+		runErr = q.runRender(ctx, jobID, projectID)
 	default:
 		runErr = errUnknownJobType(jobType)
 	}

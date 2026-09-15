@@ -8,14 +8,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"smclipper-backend/internal/models"
+	"smclipper-backend/internal/jobs"
 )
 
 type ClipHandler struct {
-	DB *pgxpool.Pool
+	DB    *pgxpool.Pool
+	Queue *jobs.Queue
 }
 
-func NewClipHandler(db *pgxpool.Pool) *ClipHandler {
-	return &ClipHandler{DB: db}
+func NewClipHandler(db *pgxpool.Pool, q *jobs.Queue) *ClipHandler {
+	return &ClipHandler{DB: db, Queue: q}
 }
 
 // POST /api/projects/{id}/clips/import
@@ -201,4 +203,86 @@ func (h *ClipHandler) DeleteClip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// POST /api/clips/{id}/render
+func (h *ClipHandler) TriggerRender(w http.ResponseWriter, r *http.Request) {
+	clipID := r.PathValue("id")
+	ctx := context.Background()
+
+	var projectID string
+	err := h.DB.QueryRow(ctx, `SELECT project_id FROM clip_candidates WHERE id = $1`, clipID).Scan(&projectID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "clip not found")
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]string{"clip_id": clipID})
+
+	var jobID string
+	err = h.DB.QueryRow(ctx, `
+		INSERT INTO jobs (project_id, job_type, status, payload_json)
+		VALUES ($1, 'render', 'queued', $2)
+		RETURNING id
+	`, projectID, payload).Scan(&jobID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create render job: "+err.Error())
+		return
+	}
+
+	h.Queue.Enqueue(jobID)
+
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"job_id": jobID,
+		"status": "queued",
+	})
+}
+
+// GET /api/clips/{id}/rendered
+func (h *ClipHandler) GetRenderedClip(w http.ResponseWriter, r *http.Request) {
+	clipID := r.PathValue("id")
+
+	query := `
+		SELECT id, output_path, status, file_size, created_at
+		FROM rendered_clips WHERE clip_candidate_id = $1
+		ORDER BY created_at DESC LIMIT 1
+	`
+	var id, outputPath, status string
+	var fileSize int64
+	var createdAt interface{}
+
+	err := h.DB.QueryRow(context.Background(), query, clipID).Scan(&id, &outputPath, &status, &fileSize, &createdAt)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "no rendered clip found")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"id":          id,
+		"output_path": outputPath,
+		"status":      status,
+		"file_size":   fileSize,
+	})
+}
+
+// GET /api/clips/{id}/download
+func (h *ClipHandler) DownloadRenderedClip(w http.ResponseWriter, r *http.Request) {
+	clipID := r.PathValue("id")
+
+	var outputPath, title string
+	err := h.DB.QueryRow(context.Background(), `
+		SELECT rc.output_path, cc.title
+		FROM rendered_clips rc
+		JOIN clip_candidates cc ON cc.id = rc.clip_candidate_id
+		WHERE rc.clip_candidate_id = $1
+		ORDER BY rc.created_at DESC LIMIT 1
+	`, clipID).Scan(&outputPath, &title)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "rendered clip not found")
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+title+".mp4\"")
+	w.Header().Set("Content-Type", "video/mp4")
+	http.ServeFile(w, r, outputPath)
 }

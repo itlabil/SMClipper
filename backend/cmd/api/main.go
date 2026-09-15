@@ -22,9 +22,10 @@ func main() {
 	projectHandler := handlers.NewProjectHandler(db, queue)
 	jobHandler := handlers.NewJobHandler(db)
 	transcriptHandler := handlers.NewTranscriptHandler(db)
-	clipHandler := handlers.NewClipHandler(db)
+	clipHandler := handlers.NewClipHandler(db, queue)
 	renderConfigHandler := handlers.NewRenderConfigHandler(db)
 	subtitleHandler := handlers.NewSubtitleHandler(db, cfg.StoragePath)
+
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
@@ -45,6 +46,10 @@ func main() {
 	mux.HandleFunc("POST /api/projects/{id}/clips", clipHandler.CreateClip)
 	mux.HandleFunc("PUT /api/clips/{id}", clipHandler.UpdateClip)
 	mux.HandleFunc("DELETE /api/clips/{id}", clipHandler.DeleteClip)
+
+	mux.HandleFunc("POST /api/clips/{id}/render", clipHandler.TriggerRender)
+	mux.HandleFunc("GET /api/clips/{id}/rendered", clipHandler.GetRenderedClip)
+	mux.HandleFunc("GET /api/clips/{id}/download", clipHandler.DownloadRenderedClip)
 
 	mux.HandleFunc("PUT /api/clips/{id}/render-config", renderConfigHandler.UpsertRenderConfig)
 	mux.HandleFunc("GET /api/clips/{id}/render-config", renderConfigHandler.GetRenderConfig)
