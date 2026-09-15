@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -12,14 +14,16 @@ import (
 )
 
 type ProjectHandler struct {
-	DB    *pgxpool.Pool
-	Queue *jobs.Queue
+	DB          *pgxpool.Pool
+	Queue       *jobs.Queue
+	StoragePath string
 }
 
-func NewProjectHandler(db *pgxpool.Pool, q *jobs.Queue) *ProjectHandler {
-	return &ProjectHandler{DB: db, Queue: q}
+func NewProjectHandler(db *pgxpool.Pool, q *jobs.Queue, storagePath string) *ProjectHandler {
+	return &ProjectHandler{DB: db, Queue: q, StoragePath: storagePath}
 }
 
+// POST /api/projects
 // POST /api/projects
 func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateProjectRequest
@@ -33,17 +37,29 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ambil metadata (title, channel) sebelum simpan - tidak mendownload video
+	title := ""
+	channelName := ""
+	meta, err := jobs.FetchYoutubeMetadata(req.YoutubeURL)
+	if err == nil {
+		title = meta.Title
+		channelName = meta.Channel
+	}
+	// Kalau fetch metadata gagal, kita tetap lanjut simpan project dengan title kosong
+	// (jangan blokir user hanya karena metadata gagal diambil)
+
 	var project models.Project
 	query := `
-		INSERT INTO projects (youtube_url, status)
-		VALUES ($1, 'pending')
-		RETURNING id, youtube_url, COALESCE(title, '') as title, status, created_at, updated_at
+		INSERT INTO projects (youtube_url, title, channel_name, status)
+		VALUES ($1, $2, $3, 'pending')
+		RETURNING id, youtube_url, COALESCE(title, ''), COALESCE(channel_name, ''), status, created_at, updated_at
 	`
 
-	err := h.DB.QueryRow(context.Background(), query, req.YoutubeURL).Scan(
+	err = h.DB.QueryRow(context.Background(), query, req.YoutubeURL, title, channelName).Scan(
 		&project.ID,
 		&project.YoutubeURL,
 		&project.Title,
+		&project.ChannelName,
 		&project.Status,
 		&project.CreatedAt,
 		&project.UpdatedAt,
@@ -62,21 +78,22 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 
 	var project models.Project
 	query := `
-		SELECT id, youtube_url, title, status, created_at, updated_at
+		SELECT id, youtube_url, COALESCE(title, ''), COALESCE(channel_name, ''), status, created_at, updated_at
 		FROM projects
 		WHERE id = $1
 	`
 
 	err := h.DB.QueryRow(context.Background(), query, id).Scan(
-		&project.ID,
-		&project.YoutubeURL,
-		&project.Title,
-		&project.Status,
-		&project.CreatedAt,
+		&project.ID, 
+		&project.YoutubeURL, 
+		&project.Title, 
+		&project.ChannelName,
+		&project.Status, 
+		&project.CreatedAt, 
 		&project.UpdatedAt,
 	)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "project not found")
+		respondError(w, http.StatusNotFound, "project not found: "+err.Error())
 		return
 	}
 
@@ -86,7 +103,7 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 // GET /api/projects
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	query := `
-		SELECT id, youtube_url, COALESCE(title, '') as title, status, created_at, updated_at
+		SELECT id, youtube_url, COALESCE(title, ''), COALESCE(channel_name, ''), status, created_at, updated_at
 		FROM projects
 		ORDER BY created_at DESC
 	`
@@ -101,7 +118,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	projects := []models.Project{}
 	for rows.Next() {
 		var p models.Project
-		if err := rows.Scan(&p.ID, &p.YoutubeURL, &p.Title, &p.Status, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.YoutubeURL, &p.Title, &p.ChannelName, &p.Status, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to scan project: "+err.Error())
 			return
 		}
@@ -155,4 +172,33 @@ func (h *ProjectHandler) TriggerTranscribe(w http.ResponseWriter, r *http.Reques
 		"job_id": jobID,
 		"status": "queued",
 	})
+}
+
+// DELETE /api/projects/{id}
+func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	// Hapus row di database dulu (cascade otomatis hapus videos, transcripts, jobs, clip_candidates, dll)
+	tag, err := h.DB.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to delete project: "+err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		respondError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	// Hapus folder fisik di disk (video, audio, transcript, clips, dll)
+	projectDir := filepath.Join(h.StoragePath, id)
+	if err := os.RemoveAll(projectDir); err != nil {
+		// Data DB sudah terhapus, tapi file fisik gagal dihapus - beri tahu user tapi tetap anggap sukses
+		respondJSON(w, http.StatusOK, map[string]string{
+			"status":  "deleted",
+			"warning": "database record deleted, but failed to remove files: " + err.Error(),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

@@ -65,7 +65,7 @@ func (h *ClipHandler) ImportClips(w http.ResponseWriter, r *http.Request) {
 		query := `
 			INSERT INTO clip_candidates (project_id, title, start_ms, end_ms, reason, hook_score, source, order_index)
 			VALUES ($1, $2, $3, $4, $5, $6, 'ai_import', $7)
-			RETURNING id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), hook_score, source, order_index, created_at, updated_at
+			RETURNING id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), COALESCE(hook_score, 0), source, order_index, created_at, updated_at
 		`
 		err = tx.QueryRow(ctx, query, projectID, item.Title, startMs, endMs, item.Reason, item.HookScore, i).Scan(
 			&clip.ID, &clip.ProjectID, &clip.Title, &clip.StartMs, &clip.EndMs,
@@ -93,7 +93,7 @@ func (h *ClipHandler) ListClips(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 
 	query := `
-		SELECT id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), hook_score, source, order_index, created_at, updated_at
+		SELECT id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), COALESCE(hook_score, 0), source, order_index, created_at, updated_at
 		FROM clip_candidates
 		WHERE project_id = $1
 		ORDER BY order_index ASC, start_ms ASC
@@ -139,7 +139,7 @@ func (h *ClipHandler) CreateClip(w http.ResponseWriter, r *http.Request) {
 		VALUES ($1, $2, $3, $4, 'manual', (
 			SELECT COALESCE(MAX(order_index), -1) + 1 FROM clip_candidates WHERE project_id = $1
 		))
-		RETURNING id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), hook_score, source, order_index, created_at, updated_at
+		RETURNING id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), COALESCE(hook_score, 0), source, order_index, created_at, updated_at
 	`
 	err := h.DB.QueryRow(context.Background(), query, projectID, req.Title, req.StartMs, req.EndMs).Scan(
 		&clip.ID, &clip.ProjectID, &clip.Title, &clip.StartMs, &clip.EndMs,
@@ -171,7 +171,7 @@ func (h *ClipHandler) UpdateClip(w http.ResponseWriter, r *http.Request) {
 			end_ms = COALESCE($3, end_ms),
 			updated_at = now()
 		WHERE id = $4
-		RETURNING id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), hook_score, source, order_index, created_at, updated_at
+		RETURNING id, project_id, title, start_ms, end_ms, COALESCE(reason, ''), COALESCE(hook_score, 0), source, order_index, created_at, updated_at
 	`
 
 	var clip models.ClipCandidate

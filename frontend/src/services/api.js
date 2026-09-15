@@ -18,6 +18,9 @@ export default {
   getProject(id) {
     return api.get(`/projects/${id}`)
   },
+  deleteProject(id) {
+    return api.delete(`/projects/${id}`)
+  },
   triggerDownload(projectId) {
     return api.post(`/projects/${projectId}/download`)
   },
@@ -75,5 +78,17 @@ export default {
   },
   downloadClipUrl(clipId) {
     return `http://localhost:8080/api/clips/${clipId}/download`
+  },
+  videoStreamUrl(projectId) {
+    return `http://localhost:8080/api/projects/${projectId}/video`
+  },
+  detectSegments(clipId) {
+    return api.post(`/clips/${clipId}/segments/detect`)
+  },
+  listSegments(clipId) {
+    return api.get(`/clips/${clipId}/segments`)
+  },
+  updateSegment(segmentId, data) {
+    return api.put(`/segments/${segmentId}`, data)
   },
 }
