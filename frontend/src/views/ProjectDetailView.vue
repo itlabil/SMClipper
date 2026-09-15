@@ -44,6 +44,8 @@ Format JSON yang harus kamu hasilkan:
   ]
 }
 
+Simpan / buatkan dalam bentuk file Transcribe.json
+
 Berikut transcript-nya (atau lihat file terlampir):
 [TEMPEL/LAMPIRKAN TRANSCRIPT DI SINI]`
 
